@@ -10,12 +10,14 @@ import numpy as np
 
 import torch
 import torch.backends.cudnn as cudnn
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from visdom import Visdom
 
 from dataset.dataset import Dataset
 
+# 仍然保留其他损失的导入以便根据需要切换
 from loss.Dice import DiceLoss
 from loss.ELDice import ELDiceLoss
 from loss.WBCE import WCELoss
@@ -48,9 +50,19 @@ train_ds = Dataset(os.path.join(para.training_set_path, 'ct'), os.path.join(para
 # 定义数据加载
 train_dl = DataLoader(train_ds, para.batch_size, True, num_workers=para.num_workers, pin_memory=para.pin_memory)
 
-# 挑选损失函数
-loss_func_list = [DiceLoss(), ELDiceLoss(), WCELoss(), JaccardLoss(), SSLoss(), TverskyLoss(), HybridLoss(), BCELoss()]
-loss_func = loss_func_list[5]
+# 使用加权交叉熵提升肿瘤类别的损失权重
+class_weights = torch.FloatTensor([1.0, 2.0]).cuda()  # 肝脏/背景, 肿瘤
+ce_loss = nn.CrossEntropyLoss(weight=class_weights)
+
+
+def loss_func(pred, target):
+    """计算带权重的交叉熵损失
+
+    由于网络输出为单通道概率图，这里将其转换为两通道形式，再
+    使用带权重的交叉熵，从而对肿瘤类别施加更大的惩罚。
+    """
+    pred_two = torch.cat((1 - pred, pred), dim=1)
+    return ce_loss(pred_two, target.long())
 
 # 定义优化器
 opt = torch.optim.Adam(net.parameters(), lr=para.learning_rate)
